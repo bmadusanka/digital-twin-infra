@@ -1,6 +1,0 @@
-{
-  "baseurl": "{BLACK_DUCK_URL}",
-  "api_token": "{BLACK_DUCK_TOKEN}",
-  "insecure": false,
-  "debug": false
-}
