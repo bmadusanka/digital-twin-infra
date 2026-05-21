@@ -1,0 +1,56 @@
+---
+name: 'SaveAWSRole'
+description: 'Save AWS Role as AWS Profile'
+inputs:
+  aws-region:
+    description: ''
+    required: true
+  use-role-arn:
+    description: ''
+    required: true
+  session-name:
+    required: false
+    description: ''
+    default: GitHubActions
+  profile-name:
+    description: ''
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Configure AWS Credentials
+    id: configure-aws-credentials
+    uses: aws-actions/configure-aws-credentials@v6
+    with:
+      aws-region: ${{ inputs.aws-region }}
+      role-to-assume: ${{ inputs.use-role-arn }}
+      role-session-name: ${{ inputs.session-name }}
+      mask-aws-account-id: false
+  - name: Ensure credentials file exists
+    shell: bash
+    run: mkdir -p ~/.aws
+  - name: Save to Credentials file
+    shell: bash
+    run: |
+      echo "[${{ inputs.profile-name }}]" >> ~/.aws/credentials
+      echo "aws_access_key_id="$AWS_ACCESS_KEY_ID >> ~/.aws/credentials
+      echo "aws_secret_access_key="$AWS_SECRET_ACCESS_KEY >> ~/.aws/credentials
+      echo "aws_session_token="$AWS_SESSION_TOKEN >> ~/.aws/credentials
+      unset AWS_ACCESS_KEY_ID
+      unset AWS_SECRET_ACCESS_KEY
+      unset AWS_SESSION_TOKEN
+  - name: Show Saved role
+    shell: bash
+    run: |
+      aws sts get-caller-identity --profile ${{ inputs.profile-name }}
+  - name: Account Number
+    id: account-id
+    shell: bash --noprofile --norc -exo pipefail {0}
+    run: |
+      export profile=${{ inputs.profile-name }}
+      echo "account-id=$(aws sts get-caller-identity --profile $profile | jq '.Account')" >> $GITHUB_OUTPUT
+outputs:
+  account-id:
+    description: 'account id'
+    value: ${{ steps.account-id.outputs.account-id }}

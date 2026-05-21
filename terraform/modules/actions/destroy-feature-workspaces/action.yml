@@ -1,0 +1,249 @@
+---
+name: 'CAP Terraform'
+description: |
+  Create the Terraform plan
+inputs:
+  access-key-id:
+    description: "access key id"
+    default: ''
+    required: false
+  secret-access-key:
+    description: "access key"
+    default: ''
+    required: false
+  aws-region:
+    description: "aws region"
+    required: true
+  aws-profile-name:
+    description: "name of the aws profile to create with the provided credentials"
+    default: "default"
+    required: false
+  role-to-assume:
+    description: "Use the provided credentials to assume an IAM role and configure the Actions environment with the assumed role credentials rather than\
+      \ with the provided credentials"
+    default: ''
+    required: false
+  cap-ssh-private-key:
+    description: "cap ssh private key"
+    required: true
+  project:
+    description: "name of project"
+    required: false
+  tf-root-dir:
+    description: "Terraform root directory"
+    default: "terraform/environments"
+    required: false
+  tf-environment:
+    description: "Terraform environment"
+    required: true
+  stage:
+    description: "Stage name"
+    required: true
+  state-lock-timeout:
+    description: "Timeout in mins for which state file will be locked"
+    default: "20m"
+    required: false
+  tf-bucket-base-name:
+    description: "Terraform bucket base name"
+    default: "terraform-backend"
+    required: false
+  tf-dynamo-base-name:
+    description: "Terraform dynamo base name"
+    default: "terraform-state-lock"
+    required: false
+  fetch-from-secretsmanager:
+    description: "Whether to try and pull TF Vars from Secrets Manager or not"
+    default: "true"
+    required: false
+  tf-bucket-name:
+    description: "Terraform bucket full name"
+    default: 'BucketNameNotSet'
+    required: false
+  tf-dynamo-name:
+    description: "Terraform dynamo table full name"
+    default: 'DynamoNameNotSet'
+    required: false
+  tf-state-prefix:
+    description: "Prefix to save the state in"
+    default: 'TFStatePrefixNotSet'
+    required: false
+  tf-state-additional-prefix:
+    description: "tf additional prefix"
+    default: ''
+    required: false
+  tf-parallelism:
+    description: "Limit the number of concurrent operations as Terraform walks the graph. Defaults to 10."
+    default: 10
+    required: false
+  tfswitch-version:
+    description: "Tfswitch action version. In case the version needs to be specified because of failing releases."
+    default: ""
+    required: false
+  role-duration-seconds:
+    description: "Maximum session duration (in seconds) that you want to set for the specified role. This setting can have a value from 1 hour to 12 hours."
+    default: 3600
+    required: false
+  apply-destroy:
+    description: "Enable this if you checked the plan and you want to apply terraform destroy."
+    default: false
+    required: false
+runs:
+  using: "composite"
+  steps:
+  - name: Install tfswitch
+    shell: bash
+    run: |
+      curl -o install.sh https://raw.githubusercontent.com/warrensbox/terraform-switcher/release/install.sh
+      chmod 755 install.sh
+      ./install.sh -b ~/.tfswitch/bin ${{ inputs.tfswitch-version }}
+      echo "~/.tfswitch/bin" >> $GITHUB_PATH
+      rm -f /usr/local/bin/terraform > /dev/null 2>&1
+  - name: Install Terraform
+    shell: bash
+    run: |
+      cd ${{ inputs.tf-root-dir }}/${{ inputs.tf-environment }}
+      tfswitch
+  - name: Configure AWS Credentials
+    if: inputs.access-key-id != '' && inputs.secret-access-key != ''
+    shell: bash
+    run: |
+      aws configure set aws_access_key_id ${{ inputs.access-key-id }} --profile ${{ inputs.aws-profile-name }}
+      aws configure set aws_secret_access_key ${{ inputs.secret-access-key }} --profile ${{ inputs.aws-profile-name }}
+      aws configure set region ${{ inputs.aws-region }} --profile ${{ inputs.aws-profile-name }}
+  - name: Authenticate with OIDC role
+    if: inputs.role-to-assume != ''
+    uses: aws-actions/configure-aws-credentials@v6
+    with:
+      aws-region: ${{ inputs.aws-region }}
+      role-to-assume: ${{ inputs.role-to-assume }}
+      role-session-name: ${{ github.event.repository.name }}
+      mask-aws-account-id: false
+      role-duration-seconds: ${{ inputs.role-duration-seconds }}
+  - name: Setup Master SSH Key
+    uses: ./shared/actions/cap-master-ssh-key
+    with:
+      ssh-private-key: ${{ inputs.cap-ssh-private-key }}
+  - name: Set env vars
+    shell: bash
+    run: |
+      echo PATH_PREFIX=${{ inputs.tf-root-dir }}/${{ inputs.tf-environment }} >> $GITHUB_ENV
+  - name: Create .tfvars
+    if: contains(inputs.fetch-from-secretsmanager, 'true')
+    uses: ./shared/actions/create-tfvars-from-secretsmanager
+    with:
+      secret-name: github-actions-${{ inputs.project }}-${{ inputs.tf-environment }}-${{ inputs.stage }}
+      tf-vars-file-path: ${{ github.workspace }}/${{ env.PATH_PREFIX }}/${{ inputs.tf-environment }}.auto.tfvars
+  - name: Display project and user information
+    shell: bash
+    run: |
+      aws sts get-caller-identity
+  - name: Set bucket and dynamo table names or create them if not specified as inputs
+    shell: bash
+    id: set-tf-backend-names
+    run: |
+      if [ '${{ inputs.tf-bucket-name }}' == 'BucketNameNotSet' ]
+      then
+        echo BUCKET=${{ inputs.project }}-${{ inputs.stage }}-${{ inputs.tf-bucket-base-name }}  >> $GITHUB_OUTPUT
+      else
+        echo BUCKET=${{ inputs.tf-bucket-name }} >> $GITHUB_OUTPUT
+      fi
+
+      if [ '${{ inputs.tf-dynamo-name }}' == 'DynamoNameNotSet' ]
+      then
+        echo DYNAMO_TABLE=${{inputs.project}}-${{ inputs.stage }}-${{ inputs.tf-dynamo-base-name }} >> $GITHUB_OUTPUT
+      else
+        echo DYNAMO_TABLE=${{ inputs.tf-dynamo-name }} >> $GITHUB_OUTPUT
+      fi
+
+      if [ '${{ inputs.tf-state-prefix }}' == 'TFStatePrefixNotSet' ]
+      then
+        echo KEY_PREFIX=analytics-vpc-${{ inputs.aws-region }}/${{ inputs.tf-state-additional-prefix }}${{ inputs.tf-environment }}/${{ inputs.tf-environment }}.tfstate >> $GITHUB_OUTPUT
+        echo WORKSPACE_KEY_PREFIX=env: >> $GITHUB_OUTPUT
+      else
+        echo WORKSPACE_KEY_PREFIX=${{ inputs.tf-state-prefix }}/env: >> $GITHUB_OUTPUT
+      fi
+  - name: Get workspace environments
+    id: get-feature-workspaces
+    shell: bash
+    run: |
+      for workspace in $(aws s3api list-objects --bucket ${{ steps.set-tf-backend-names.outputs.BUCKET }} --prefix ${{ steps.set-tf-backend-names.outputs.WORKSPACE_KEY_PREFIX }} | jq -r '.Contents[].Key'); do
+        if [[ "$workspace" == *"${{ inputs.tf-environment }}.tfstate" ]]; then
+          aws s3api get-object --bucket ${{ steps.set-tf-backend-names.outputs.BUCKET }} --key $workspace tmp.json
+          resources=$(jq -r '.resources' "tmp.json")
+          if [ -z "$resources" ] || [ "$resources" == "[]" ]; then
+            echo "Resources are empty"
+            continue;
+          fi
+          echo "Resources are not empty"
+            WORKSPACES+=(${workspace});
+        fi
+      done
+      echo ENV_WORKSPACES=${WORKSPACES[@]}  >> $GITHUB_OUTPUT
+      echo "::group::LOGS FOR DEBUGGING"
+      echo "${WORKSPACES[@]}"
+      echo "::endgroup::"
+  - name: Terraform plan destroy workspaces
+    shell: bash
+    id: tf-plan-destroy
+    run: |
+      set +e
+      cd ${{ inputs.tf-root-dir }}/${{ inputs.tf-environment }}
+
+      error_workspaces=()
+      for workspace in ${{ steps.get-feature-workspaces.outputs.ENV_WORKSPACES }}; do
+        echo "::group::$workspace"
+
+        if [[ $workspace == env:/default*  ]]; then
+          continue;
+        fi
+
+        retVal=0
+        terraform init -backend-config=region=${{ inputs.aws-region }} \
+          -backend-config=bucket=${{ steps.set-tf-backend-names.outputs.BUCKET }} \
+          -backend-config=dynamodb_table=${{ steps.set-tf-backend-names.outputs.DYNAMO_TABLE }} \
+          -backend-config=key=$workspace\
+          -reconfigure
+
+        retVal=$?
+        if [ $retVal -ne 0 ]; then
+          echo "Error from Terraform init for workspace: $workspace"
+          error_workspaces+=("$workspace")
+        fi
+
+        terraform plan -input=false                       \
+          -parallelism=${{inputs.tf-parallelism}}         \
+          -lock-timeout=${{ inputs.state-lock-timeout }}  \
+          -destroy \
+          -out=plan.out
+
+        retVal=$?
+        if [ $retVal -ne 0 ]; then
+          echo "Error from Terraform plan for workspace: $workspace"
+          error_workspaces+=("$workspace")
+        fi
+
+        if [[ "${{ inputs.apply-destroy }}" == true ]]; then
+          terraform destroy -input=false  \
+            -parallelism=${{inputs.tf-parallelism}}         \
+            -lock-timeout=${{ inputs.state-lock-timeout }} \
+            -auto-approve
+
+          retVal=$?
+          if [ $retVal -ne 0 ]; then
+            echo "Error from Terraform destroy for workspace: $workspace"
+            error_workspaces+=("$workspace")
+          fi
+        fi
+        echo "::endgroup::"
+      done
+
+      if [[ ${#error_workspaces[@]} -gt 0 ]]; then
+        set -e
+        echo "Workspaces with errors:"
+        for err_workspace in "${error_workspaces[@]}"; do
+            echo "- $err_workspace"
+        done
+        exit 1
+      else
+          echo "No errors found."
+      fi

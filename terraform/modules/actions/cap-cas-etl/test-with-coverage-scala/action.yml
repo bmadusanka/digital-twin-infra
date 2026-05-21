@@ -1,0 +1,13 @@
+---
+name: "Test with coverage report creation Scala"
+description: "Test and prepare aggregated coverage report for Scala project"
+runs:
+  using: "composite"
+  steps:
+  - name: clean
+    shell: bash
+    run: sbt clean
+  - name: Run tests and create Coverage report
+    shell: bash
+    run: |
+      sbt coverage test coverageAggregate coverageReport

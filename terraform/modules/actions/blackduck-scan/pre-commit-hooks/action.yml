@@ -1,0 +1,76 @@
+---
+name: 'Install the related libraries to pre-commit hooks and scan them'
+description: |
+  The following Git Action installs the pre-commit hooks related libraries and scans them. There are no pre-conditions needed for this task to work.
+inputs:
+  projectName:
+    description: "Name to be used for the project in Black Duck"
+    required: true
+  codeLocationSuffix:
+    description: "Name to be used for the version in Black Duck"
+    required: true
+  tags:
+    description: "Includes relevant information regarding the project distribution for license categorization"
+    required: false
+    default: "none"
+  blackDuckToken:
+    description: "Token used to submit the scans to black duck dashboards"
+    required: true
+  blackDuckURL:
+    description: "URL from the Black Duck Dashboards where the scans will be deployed"
+    required: true
+  releaseTag:
+    description: "ID of the currently released version. In case a merge to master was he trigger of the action, 'nonrelease' should be passed"
+    required: true
+  userGroup:
+    description: "User group to which the project should be assigned"
+    required: true
+    default: "cap"
+  groupName:
+    description: "Project group name to which the project should be assigned"
+    required: true
+    default: "cap"
+  codeLocationName:
+    description: "Sets the name for the created scan. If nothing given uses the name for the version"
+    required: false
+    default: 0
+  isRelease:
+    description: "true/false value that checks if it is a release. Defaults to false."
+    required: false
+    default: false
+  mainBranchName:
+    description: "Name given to main branch."
+    required: false
+    default: main
+runs:
+  using: "composite"
+  steps:
+  - name: "Install the pre-commit package from python and install it"
+    shell: bash
+    run: |
+      python3 -m venv envScan
+      source envScan/bin/activate
+      python -m pip install --upgrade pip setuptools wheel
+      pip install pre-commit
+      pre-commit install
+      echo "pre-commit" > requirements.txt
+      pip list
+      releaseArgs=()
+      if [ ${{inputs.isRelease}} == "true" ];then
+        releaseArgs+=( "--detect.project.version.phase=RELEASED" )
+        releaseArgs+=( "--detect.project.clone.categories=ALL" )
+        releaseArgs+=( "--detect.clone.project.version.name=${{inputs.mainBranchName}}" )
+        releaseArgs+=( "--detect.policy.check.fail.on.severities=ALL" )
+      fi
+      bash <(curl -s https://detect.blackduck.com/detect9.sh) \
+      --blackduck.url=${{ inputs.blackDuckURL }} \
+      --blackduck.api.token=${{ inputs.blackDuckToken }} \
+      --detect.project.name=${{ inputs.projectName }} \
+      --detect.project.version.name=${{ inputs.releaseTag }} \
+      --detect.project.tags=${{ inputs.tags }} \
+      --detect.code.location.name=${{ inputs.projectName }}/${{ inputs.releaseTag }}/${{ inputs.codeLocationSuffix }} \
+      --detect.pip.requirements.path=./requirements.txt \
+      --detect.tools=DETECTOR \
+      --detect.project.user.groups=${{ inputs.userGroup }} \
+      --detect.project.group.name=${{ inputs.groupName }} ${releaseArgs[@]}
+      deactivate

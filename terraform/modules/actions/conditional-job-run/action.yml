@@ -1,0 +1,56 @@
+---
+name: 'Conditional Job Run Scan'
+description: |
+  The following Git Action indicates wheter skippable pipeline jobs can be skipped or not based on the
+  "ignore patterns". It checks the current branch against the main/master branch.
+  TO MAKE THIS ACTION WORK PROPERLY ENSURE YOU CHECKOUT YOUR REPO WITH "fetch-depth" 0!
+  This action is especially useful if you have to run parts of the pipeline no matter which file has been changed, but
+  not all of them should be run in special cases. Think of the usual "paths-ignore" feature as basis but then you have
+  to run parts of the pipeline for some reason.
+
+inputs:
+  ignorePatterns:
+    description: 'File patterns which belong to files which should just cause parts of the pipeline to run seperated by commas (**md,docs/**). If no patterns
+      are given, the return value will always be false'
+    required: false
+    default: ''
+  mainBranchName:
+    description: 'Insert the name of your main/master branch since it is used to compare the commit with.'
+    required: true
+  requestType:
+    description: 'Indicator if the request type was push or pull request. Needed to perform the check against the correct previous commit.'
+    required: true
+outputs:
+  skip-jobs:
+    description: "Indicator if skippable jobs can be skipped"
+    value: ${{ steps.check.outputs.skip }}
+
+runs:
+  using: "composite"
+  steps:
+  - id: check
+    run: |
+      prevCommit='origin/${{ inputs.mainBranchName }}'
+      if [[ "${{ inputs.requestType }}" == "push" || "${{ inputs.requestType }}" == "push_request" ]]; then
+        prevCommit='HEAD^'
+      fi
+      fileList=$(git diff --name-only $prevCommit...HEAD)
+      IFS=',' read -r -a ignorePatternsA <<< "${{ inputs.ignorePatterns }}"
+      skip=true
+      for f in ${fileList};
+      do
+        singleMatch=false
+        for pattern in "${ignorePatternsA[@]}"
+        do
+          if [[ $f == $pattern ]]; then
+            singleMatch=true
+            break
+          fi
+        done
+        if [[ $singleMatch == false ]]; then
+          skip=false
+          break
+        fi
+      done
+      echo "skip=$skip" >> $GITHUB_OUTPUT
+    shell: bash

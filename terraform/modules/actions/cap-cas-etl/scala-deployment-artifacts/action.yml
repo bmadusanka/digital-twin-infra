@@ -1,0 +1,29 @@
+---
+name: "Scala deployment artifacts"
+description: "prepare scala deployment artifacts"
+inputs:
+  project-name:
+    description: "Name of project"
+    required: true
+  scala-modules:
+    description: "list of scala modules to be included in deployment artifact"
+    required: true
+runs:
+  using: "composite"
+  steps:
+  - name: Create job source code artifact directory
+    shell: bash
+    run: |
+      modules="${{ inputs.scala-modules }}"
+      for val in $modules; do
+        echo "./${{ inputs.project-name }}-job-source-code-artifact/$val"
+        mkdir -p ./${{ inputs.project-name }}-job-source-code-artifact/$val
+      done
+  - name: Copy source code files
+    shell: bash
+    run: |
+      modules="${{ inputs.scala-modules }}"
+      for val in $modules; do
+          echo "./$val/src/main/scala/jobs/* ./${{ inputs.project-name }}-job-source-code-artifact/$val/"
+          cp ./$val/src/main/scala/jobs/* ./${{ inputs.project-name }}-job-source-code-artifact/$val/
+      done

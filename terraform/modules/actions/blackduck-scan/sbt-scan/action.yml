@@ -1,0 +1,80 @@
+---
+name: 'SBT Scan'
+description: |
+  The following Git Action allows to perform an SBT Scan over a repository.
+  For this scan to work, the action has to be run over the directory where the Scala project is, and mainly the build.sbt file. Additionally the Dependency Graph plugin
+  has to be added to the plugins list of the project. Additionally it is required to Setup Scala by calling the olafurpg/setup-scala@v10 action with the attribute:
+  java-version: "adopt@1.8"
+inputs:
+  projectName:
+    description: "Name to be used for the project in Black Duck"
+    required: true
+  codeLocationSuffix:
+    description: "Name to be used for the version in Black Duck"
+    required: true
+  tags:
+    description: "Includes relevant information regarding the project distribution for license categorization"
+    required: false
+    default: "none"
+  releaseTag:
+    description: "ID of the currently released version. In case a merge to master was he trigger of the action, 'nonrelease' should be passed"
+    required: true
+  unmapPrevious:
+    description: "Unlink previous scans to this version (when existing)"
+    required: false
+    default: false
+  blackDuckToken:
+    description: "Token used to submit the scans to black duck dashboards"
+    required: true
+  blackDuckURL:
+    description: "URL from the Black Duck Dashboards where the scans will be deployed"
+    required: true
+  userGroup:
+    description: "User group to which the project should be assigned"
+    required: true
+    default: "cap"
+  groupName:
+    description: "Project group name to which the project should be assigned"
+    required: true
+    default: "cap"
+  codeLocationName:
+    description: "Sets the name for the created scan. If nothing given uses the name for the version"
+    required: false
+    default: 0
+  isRelease:
+    description: "true/false value that checks if it is a release. Defaults to false."
+    required: false
+    default: false
+  mainBranchName:
+    description: "Name given to main branch."
+    required: false
+    default: main
+runs:
+  using: "composite"
+  steps:
+  - name: "Run Detect from Black Duck to scan the Git Repository"
+    shell: bash
+    run: |
+      export DETECT_SOURCE=https://sig-repo.synopsys.com/bds-integrations-release/com/synopsys/integration/synopsys-detect/8.0.0/synopsys-detect-8.0.0.jar
+      releaseArgs=()
+      if [ ${{inputs.isRelease}} == "true" ];then
+        releaseArgs+=( "--detect.project.version.phase=RELEASED" )
+        releaseArgs+=( "--detect.project.clone.categories=ALL" )
+        releaseArgs+=( "--detect.clone.project.version.name=${{inputs.mainBranchName}}" )
+      fi
+      bash <(curl -s https://detect.blackduck.com/detect9.sh) \
+      --blackduck.url=${{ inputs.blackDuckURL }} \
+      --blackduck.api.token=${{ inputs.blackDuckToken }} \
+      --detect.project.name=${{ inputs.projectName }} \
+      --detect.project.version.name=${{ inputs.releaseTag }} \
+      --detect.project.tags=${{ inputs.tags }} \
+      --detect.project.codelocation.unmap=${{ inputs.unmapPrevious }} \
+      --detect.code.location.name=${{ inputs.projectName }}/${{ inputs.releaseTag }}/${{ inputs.codeLocationSuffix }} \
+      --blackduck.trust.cert=true \
+      --detect.project.force.update=true \
+      --logging.level.com.synopsys.integration=DEBUG \
+      --detect.detector.search.depth=10 \
+      --detect.project.detector=SBT \
+      --detect.project.tools=DETECTOR \
+      --detect.project.user.groups=${{ inputs.userGroup }} \
+      --detect.project.group.name=${{ inputs.groupName }} ${releaseArgs[@]}

@@ -1,0 +1,22 @@
+---
+name: 'Retrieve Github Actions OIDC JWT Token'
+description: |
+  Retrieve JWT Token Signed by Github Actions IDP and Set It as Variable
+inputs:
+  audience:
+    description: "Audience of The JWT Token"
+    default: ${{ github.repository }}
+    required: false
+  variable:
+    description: "OIDC Token Variable Name"
+    default: "GH_OIDC_TOKEN"
+    required: false
+runs:
+  using: "composite"
+  steps:
+  - name: 'Set Github Actions OIDC Token as Variable'
+    shell: bash
+    run: |
+      OIDC_TOKEN=$(curl -sLS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${{ inputs.audience }}" -H "User-Agent: actions/oidc-client" -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+      GH_OIDC_TOKEN=$(echo $OIDC_TOKEN | jq -j '.value')
+      echo "${{ inputs.variable }}=$GH_OIDC_TOKEN" >> $GITHUB_ENV

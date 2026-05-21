@@ -1,0 +1,25 @@
+---
+name: 'Setup tfswitch'
+description: 'tfswitch allows to conveniently interchange between terraform environments'
+inputs:
+  repo:
+    description: "The git repo from which to clone the installation script"
+    required: false
+    default: https://raw.githubusercontent.com/warrensbox/terraform-switcher/release/install.sh
+  version:
+    description: "Specify which version to be installed, defaults to latest."
+    required: false
+    default: "v1.1.0" #latest working version
+runs:
+  using: 'composite'
+  steps:
+  - name: Setup tfswitch
+    shell: bash
+    run: |
+      curl -o install.sh ${{ inputs.repo }}
+      chmod 755 install.sh
+      ./install.sh -b ~/.tfswitch/bin ${{inputs.version}}
+      echo "~/.tfswitch/bin" >> $GITHUB_PATH
+      rm -f /usr/local/bin/terraform > /dev/null 2>&1
+      ~/.tfswitch/bin/tfswitch
+      export PATH="$PATH:${HOME}/bin:/usr/local/bin"

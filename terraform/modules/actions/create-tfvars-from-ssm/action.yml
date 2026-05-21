@@ -1,0 +1,22 @@
+---
+name: 'Retrieve and Create .tfvars'
+description: |
+  Retrieve TF Vars from AWS SSM Parameter Store and save them to the designated
+  file path.
+inputs:
+  ssm-parameter-name:
+    description: "Name of SSM Parameter"
+    required: true
+  tf-vars-file-path:
+    description: "Complete path to desired .tfvars file"
+    required: true
+runs:
+  using: "composite"
+  steps:
+  - name: "Create .tfvars from AWS SSM Parameter"
+    shell: bash
+    run: |
+      aws ssm get-parameter \
+        --name "${{ inputs.ssm-parameter-name }}" \
+        --with-decryption | jq -r '.Parameter.Value' \
+        > ${{ inputs.tf-vars-file-path }}

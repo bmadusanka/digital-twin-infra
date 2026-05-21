@@ -1,0 +1,300 @@
+---
+name: 'CAP Terragrunt'
+description: |
+  Execute Terragrunt operations with OpenTofu
+inputs:
+  cap-ssh-private-key:
+    description: "cap ssh private key"
+    required: true
+  # Operation Configuration
+  tg-step:
+    description: "Terragrunt operation to execute. Valid options: 'plan', 'apply', 'plan-destroy', 'destroy', 'custom-command', 'validate'"
+    required: true
+  tg-custom-command:
+    description: "The custom terragrunt command to run if tf-step is set to custom-tf-command"
+    default: ""
+    required: false
+
+  # Project Structure
+  tg-root-dir:
+    description: "Root directory containing Terragrunt configuration files"
+    default: "terragrunt"
+    required: false
+  stage:
+    description: "Deployment stage identifier"
+    required: true
+  project:
+    description: "Project name for resource identification"
+    required: false
+  tfswitch-version:
+    description: "Tfswitch action version. In case the version needs to be specified because of failing releases."
+    default: "v1.4.0"
+    required: false
+
+  # Terragrunt Settings
+  tg-version:
+    description: "Version of Terragrunt to install"
+    required: true
+  tg-parallelism:
+    description: "Maximum number of concurrent Terragrunt operations"
+    default: "10"
+    required: false
+  tg-out-dir:
+    description: "Directory for storing Terragrunt plan outputs"
+    default: "terragrunt-plans"
+    required: true
+  tg-auth-provider-cmd:
+    description: "Command to execute for authentication provider setup"
+    default: ''
+    required: false
+  tg-extra-args-plan:
+    description: "Additional attributes to include in Terragrunt plan comments"
+    default: ""
+    required: false
+  tg-extra-args-apply:
+    description: "Additional attributes to include in Terragrunt apply comments"
+    default: ""
+    required: false
+  tg-extra-args-common:
+    description: "Additional attributes to include in all Terragrunt comments"
+    default: ""
+    required: false
+
+  # Terraform Settings
+  tf-workspace:
+    description: "Terraform workspace to use"
+    required: true
+  tf-plugin-cache-dir:
+    description: "Directory for Terraform plugin cache"
+    default: '${{ github.workspace }}/.terraform.d/plugin-cache'
+    required: false
+  tf-environment:
+    description: "Environment directory within Terragrunt root"
+    required: true
+
+  # AWS Configuration
+  aws-region:
+    description: "AWS region for resource deployment"
+    required: true
+  aws-profile-name:
+    description: "AWS profile name for credentials"
+    default: "default"
+    required: false
+  access-key-id:
+    description: "AWS access key ID for authentication"
+    default: ""
+    required: false
+  secret-access-key:
+    description: "AWS secret access key for authentication"
+    default: ""
+    required: false
+  role-to-assume:
+    description: "ARN of AWS IAM role to assume for operations"
+    default: ""
+    required: false
+  role-session-name:
+    description: "Session name for assumed role"
+    default: ""
+    required: false
+  role-duration-seconds:
+    description: "Duration in seconds for assumed role session (1-12 hours)"
+    default: "3600"
+    required: false
+
+  # State Management
+  state-lock-timeout:
+    description: "Timeout duration for state file locking"
+    default: "20m"
+    required: false
+  fetch-from-secretsmanager:
+    description: "Whether to fetch variables from AWS Secrets Manager"
+    default: "false"
+    required: false
+
+  # Artifact Configuration
+  artifact-prefix:
+    description: "Prefix for artifact names to ensure uniqueness"
+    default: ""
+    required: false
+
+  # Runtime Configuration
+  python-version:
+    description: "Python version for environment setup"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+  - name: Setup Python
+    if: inputs.python-version != ''
+    uses: actions/setup-python@v6
+    with:
+      python-version: ${{ inputs.python-version }}
+  - name: Install VirtualEnv
+    shell: bash
+    if: ${{ inputs.tg-step == 'apply-auto-approve' && inputs.python-version != '' }}
+    run: pip3 install virtualenv
+  - name: Install tfswitch
+    shell: bash
+    run: |
+      curl -o install.sh https://raw.githubusercontent.com/warrensbox/terraform-switcher/release/install.sh
+      chmod 755 install.sh
+      ./install.sh -b ~/.tfswitch/bin ${{ inputs.tfswitch-version }}
+      echo "~/.tfswitch/bin" >> $GITHUB_PATH
+      rm -f /usr/local/bin/terraform > /dev/null 2>&1
+  - name: Install Terraform
+    shell: bash
+    run: |
+      cd ${{ inputs.tg-root-dir }}
+      mkdir -p ${{ inputs.tg-out-dir }}
+      tfswitch
+  - name: Configure AWS Credentials
+    if: inputs.access-key-id != '' && inputs.secret-access-key != ''
+    shell: bash
+    run: |
+      aws configure set aws_access_key_id ${{ inputs.access-key-id }} --profile ${{ inputs.aws-profile-name }}
+      aws configure set aws_secret_access_key ${{ inputs.secret-access-key }} --profile ${{ inputs.aws-profile-name }}
+      aws configure set region ${{ inputs.aws-region }} --profile ${{ inputs.aws-profile-name }}
+  - name: Authenticate with OIDC role
+    if: inputs.role-to-assume != ''
+    uses: aws-actions/configure-aws-credentials@v6
+    with:
+      aws-region: ${{ inputs.aws-region }}
+      role-to-assume: ${{ inputs.role-to-assume }}
+      role-session-name: ${{ inputs.role-session-name != '' && inputs.role-session-name || github.event.repository.name }}
+      mask-aws-account-id: false
+      role-duration-seconds: ${{ inputs.role-duration-seconds }}
+
+  - name: Setup Master SSH Key
+    uses: ./shared/actions/cap-master-ssh-key
+    with:
+      ssh-private-key: ${{ inputs.cap-ssh-private-key }}
+
+  - name: Set env vars
+    shell: bash
+    run: |
+      echo ARTIFACT_NAME_PREFIX=${{ inputs.artifact-prefix }}${{ inputs.stage }}-${{ inputs.tf-environment }}-${{ inputs.tf-workspace }} >> $GITHUB_ENV
+      echo PATH_PREFIX=${{ inputs.tg-root-dir }}/${{ inputs.tf-environment }} >> $GITHUB_ENV
+
+  - name: Create .tfvars
+    if: contains(inputs.fetch-from-secretsmanager, 'true') && ( inputs.tg-step == 'plan-out' || inputs.tg-step == 'plan-destroy' || inputs.tg-step == 'destroy-auto-approve')
+    uses: ./shared/actions/create-tfvars-from-secretsmanager
+    with:
+      secret-name: github-actions-${{ inputs.project }}-${{ inputs.stage }}
+      tf-vars-file-path: ${{ github.workspace }}/${{ env.PATH_PREFIX }}/${{ inputs.tf-environment }}.auto.tfvars
+
+  - uses: actions/download-artifact@v7
+    if: ${{ inputs.tg-step == 'apply-auto-approve' }}
+    with:
+      name: ${{ env.ARTIFACT_NAME_PREFIX }}-plan-out
+      path: ${{ env.PATH_PREFIX }}/${{ inputs.tg-out-dir }}
+
+  - uses: actions/download-artifact@v7
+    if: ${{ inputs.tg-step == 'destroy-auto-approve' }}
+    with:
+      name: ${{ env.ARTIFACT_NAME_PREFIX }}-plan-destroy
+      path: ${{ env.PATH_PREFIX }}/${{ inputs.tg-out-dir }}
+
+  - name: Display project and user information
+    shell: bash
+    run: |
+      echo WORKSPACE=${{ inputs.tf-workspace }} PROJECT=${{ inputs.project }} STAGE=${{ inputs.stage }} ENVIRONMENT=${{ inputs.tf-environment }}
+      aws sts get-caller-identity
+
+  - name: Authenticate with OIDC role
+    if: inputs.role-to-assume != ''
+    uses: aws-actions/configure-aws-credentials@v6
+    with:
+      aws-region: ${{ inputs.aws-region }}
+      role-to-assume: ${{ inputs.role-to-assume }}
+      role-session-name: ${{ inputs.role-session-name != '' && inputs.role-session-name || github.event.repository.name }}
+      mask-aws-account-id: false
+      role-duration-seconds: ${{ inputs.role-duration-seconds }}
+
+  - name: Set default auth provider
+    shell: bash
+    run: |
+      AUTH_PROVIDER_PATH=$(realpath ${{ github.action_path }}/auth.sh)
+      chmod +x $AUTH_PROVIDER_PATH
+      echo "TG_AUTH_PROVIDER_CMD=${AUTH_PROVIDER_PATH} ${{ inputs.role-to-assume }} ${{ inputs.aws-region }} ${{ github.repository }}" >> $GITHUB_ENV
+
+  - name: Set auth provider
+    if: ${{ inputs.tg-auth-provider-cmd != '' }}
+    shell: bash
+    run: echo "TG_AUTH_PROVIDER_CMD='${{ inputs.tg-auth-provider-cmd }}'" >> $GITHUB_ENV
+
+  - name: Setup Terragrunt/Terraform Variable Configuration
+    shell: bash
+    run: |
+      echo 'TF_WORKSPACE=${{ inputs.tf-workspace }}' >> $GITHUB_ENV
+      echo 'TF_IN_AUTOMATION=true' >> $GITHUB_ENV
+      echo 'TF_STATE_PERSIST_INTERVAL=10' >> $GITHUB_ENV
+      echo 'TF_WORKSPACE=${{ inputs.tf-workspace }}' >> $GITHUB_ENV
+
+
+  - name: Deploy with explicit terraform binary
+    uses: gruntwork-io/terragrunt-action@v3
+    with:
+      tf_path: "terraform"  # Explicitly use terraform even if both tofu and terraform are installed.
+      tg_version: ${{ inputs.tg-version }}
+
+
+  - name: Terragrunt Init CAP 2.0
+    shell: bash
+    run: |
+      mkdir -p ${{ inputs.tf-plugin-cache-dir }}
+      cd "${{ inputs.tg-root-dir }}/${{ inputs.tf-environment }}"
+      terragrunt init --all ${{ inputs.tg-extra-args-common }}
+
+  - name: Terraform Custom Command
+    if: ${{ inputs.tf-step == 'tg-custom-command' }}
+    shell: bash
+    run: |
+      cd "${{ inputs.tf-root-dir }}/${{ inputs.tf-environment }}"
+      ${{inputs.tg-custom-command}}
+
+  - name: Terragrunt Validate
+    if: ${{ inputs.tg-step == 'validate' }}
+    shell: bash
+    run: |
+      cd "${{ inputs.tg-root-dir }}/${{ inputs.tf-environment }}"
+      terragrunt validate --all ${{ inputs.tg-extra-args-common }}
+
+  - name: Terragrunt Plan
+    if: ${{ inputs.tg-step == 'plan-out' }}
+    shell: bash
+    run: |
+      cd "${{ inputs.tg-root-dir }}/${{ inputs.tf-environment }}"
+      terragrunt plan --all \
+        --summary-per-unit \
+        --out-dir "${{ inputs.tg-out-dir }}" \
+        --parallelism "${{ inputs.tg-parallelism }}" \
+        --lock-timeout="${{ inputs.state-lock-timeout }}" ${{ inputs.tg-extra-args-common }} ${{ inputs.tg-extra-args-plan }} | grep -v "Refreshing state...\|Reading...\|Read complete after"
+
+  - name: TF Apply
+    if: ${{ inputs.tg-step == 'apply-auto-approve' }}
+    shell: bash
+    run: |
+      cd "${{ inputs.tg-root-dir }}/${{ inputs.tf-environment }}"
+      terragrunt apply --all \
+        --non-interactive \
+        --summary-per-unit \
+        --out-dir "${{ inputs.tg-out-dir }}" \
+        --parallelism "${{ inputs.tg-parallelism }}" \
+        --lock-timeout="${{ inputs.state-lock-timeout }}" ${{ inputs.tg-extra-args-common }} ${{ inputs.tg-extra-args-apply }}
+
+  - name: Save Terragrunt Plan as Artifact
+    uses: actions/upload-artifact@v6
+    if: ${{ inputs.tg-step == 'plan-out' || inputs.tg-step == 'plan-destroy' }}
+    with:
+      name: ${{ env.ARTIFACT_NAME_PREFIX }}-${{ inputs.tg-step }}
+      path: ${{ env.PATH_PREFIX }}/${{ inputs.tg-out-dir }}
+
+  - name: Save All Files(in case of failure)
+    uses: actions/upload-artifact@v6
+    if: ${{ (inputs.tg-step == 'apply-auto-approve' || inputs.tg-step == 'destroy-auto-approve') && failure() }}
+    with:
+      name: ${{ inputs.tf-workspace }}-${{ inputs.stage }}-errored.tfstate
+      path: ${{ inputs.tg-root-dir }}/**/*
+      if-no-files-found: ignore
