@@ -1,7 +1,7 @@
 variable "git_repository" {
   type        = string
   default     = "saas-infra"
-  description = "Repository where the infrastructure was deployed from"
+  description = "Repository where the infrastructure was deployed from."
 }
 
 variable "stage" {
