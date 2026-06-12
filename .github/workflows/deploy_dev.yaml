@@ -104,6 +104,16 @@ jobs:
       - name: Terraform Apply
         run: terraform apply tfplan
 
+      - name: Push New API URL to Frontend Repo
+        env:
+          GH_TOKEN: ${{ secrets.FRONTEND_REPO_TOKEN }}
+        run: |
+          NEW_API_URL=$(terraform output -raw api_endpoint)
+
+          gh variable set NEXT_PUBLIC_API_URL \
+            --body "$NEW_API_URL" \
+            --repo ${{ github.repository_owner }}/digital-twin-app
+
   destroy:
     name: Destroy (DEV)
     needs: apply
