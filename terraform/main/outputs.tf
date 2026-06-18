@@ -3,7 +3,7 @@ output "api_endpoint" {
   value       = module.api.api_endpoint
 }
 
-output "api_endpoint" {
+output "cloudfront_uri" {
   description = "The live HTTP URL of the frontend application."
   value       = resource.aws_cloudfront_distribution.this.domain_name
 }
