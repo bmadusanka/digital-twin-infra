@@ -1,6 +1,6 @@
 variable "git_repository" {
   type        = string
-  default     = "saas-infra"
+  default     = "saas-infra."
   description = "Repository where the infrastructure was deployed from."
 }
 
